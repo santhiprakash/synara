@@ -5,6 +5,7 @@
 import {
   DEFAULT_SERVER_SETTINGS,
   MODEL_OPTIONS_BY_PROVIDER,
+  type OmpRoleDescriptor,
   type ProviderKind,
   type ProviderModelDescriptor,
   type NativeApi,
@@ -58,6 +59,7 @@ interface QueryResultLike {
     readonly cached?: boolean;
     readonly error?: string;
     readonly models?: ReadonlyArray<ProviderModelDescriptor>;
+    readonly roles?: ReadonlyArray<OmpRoleDescriptor>;
     readonly source?: string;
   };
   readonly error?: unknown;
@@ -704,6 +706,52 @@ describe("useProviderModelCatalog", () => {
     expect(catalog?.modelOptionsByProvider.omp.map((m) => m.slug)).toEqual([
       "anthropic/claude-sonnet-4",
     ]);
+  });
+
+  it("does not surface OMP modelRoles as a Roles group of pseudo-models", () => {
+    // OMP `modelRoles` bind internal sub-agent personas — the default agent
+    // spawns them through its Task tool; picking one would slug the session
+    // with the persona's bound model. Discovery may still return roles, but
+    // the picker must list real catalog models only, never `role:` slugs.
+    modelQueries.set("omp", {
+      data: {
+        models: [{ slug: "anthropic/claude-sonnet-4", name: "Claude Sonnet 4" }],
+        roles: [
+          { name: "task", model: "anthropic/claude-sonnet-4", thinkingLevel: "high" },
+          { name: "vision", model: "openai/gpt-5.2" },
+        ],
+        source: "omp-cli",
+        cached: false,
+      },
+      isFetching: false,
+      isLoading: false,
+      isPlaceholderData: false,
+      isError: false,
+    });
+
+    const catalog = readCatalogRenders({
+      selectedProvider: "omp",
+      discoveryEnabled: true,
+    }).at(-1);
+
+    const ompOptions = catalog?.modelOptionsByProvider.omp ?? [];
+    expect(ompOptions.map((model) => model.slug)).toEqual(["anthropic/claude-sonnet-4"]);
+    expect(ompOptions.some((model) => model.slug.startsWith("role:"))).toBe(false);
+    expect(ompOptions.some((model) => model.upstreamProviderId === "roles")).toBe(false);
+  });
+
+  it("keeps OMP model discovery on the shared cwd-agnostic query", () => {
+    // Nothing project-scoped feeds the OMP catalog anymore: `modelRoles` were
+    // the only cwd-layered input and they are no longer surfaced, so the picker
+    // shares the startup warmer's key instead of re-fetching per project.
+    readCatalogRenders({ selectedProvider: "omp", cwd: "/project", discoveryEnabled: true });
+
+    const call = mocks.useQuery.mock.calls.find(([value]) => {
+      const queryKey = (value as QueryOptionsLike).queryKey;
+      return queryKey[1] === "models" && queryKey[2] === "omp";
+    });
+    const ompQueryKey = call ? (call[0] as QueryOptionsLike).queryKey : undefined;
+    expect(ompQueryKey?.[7]).toBeNull();
   });
 
   it("clears OMP loading and options on terminal discovery failure", () => {

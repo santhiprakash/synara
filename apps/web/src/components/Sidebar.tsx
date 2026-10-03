@@ -2797,7 +2797,6 @@ export default function Sidebar() {
             providerModelsQueryOptions({
               provider: "omp",
               instanceId,
-              cwd: activeProject.cwd,
             }),
           )
           .catch(() => null);

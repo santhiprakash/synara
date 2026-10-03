@@ -407,21 +407,7 @@ describe("providerModelsQueryOptions", () => {
     },
   );
 
-  it("scopes OMP's model query by cwd so project modelRoles participate", () => {
-    const options = providerModelsQueryOptions({
-      provider: "omp",
-      binaryPath: "/bin/omp",
-      agentDir: "/agent",
-      cwd: "/some/project",
-    });
-    // The catalog is global, but OMP merges `<cwd>/.omp/config.yml` roles into
-    // the picker — the query key carries cwd so a project's own roles show.
-    expect(options.queryKey).toEqual(
-      providerDiscoveryQueryKeys.models("omp", "/bin/omp", null, "/agent", "/some/project"),
-    );
-  });
-
-  it("scopes non-OMP providers by cwd in their query key", () => {
+  it("scopes project-layered providers by cwd in their query key", () => {
     const options = providerModelsQueryOptions({
       provider: "opencode",
       binaryPath: "/bin/opencode",

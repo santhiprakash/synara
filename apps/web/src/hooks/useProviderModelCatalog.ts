@@ -80,15 +80,14 @@ function selectQueryData<Data>(
   return results.map((result) => result.data);
 }
 
-// OMP's catalog is global, but its `modelRoles` merge a project layer, so the
-// composer keeps cwd in the key for roles to reflect the active project.
+// These providers merge a project layer into their model catalog, so the
+// composer keeps cwd in the query key for it to reflect the active project.
 const CWD_SCOPED_MODEL_DISCOVERY_PROVIDERS: ReadonlySet<ProviderKind> = new Set([
   "antigravity",
   "droid",
   "opencode",
   "pi",
   "devin",
-  "omp",
 ]);
 
 function readProviderOptionString(options: unknown, key: string): string | null {
@@ -555,20 +554,9 @@ export function useProviderModelCatalog(input: {
         });
       }
     }
-    const ompRoles = ompDynamicModelsQuery.data?.roles ?? [];
-    if (ompRoles.length > 0) {
-      const roleOptions: ProviderModelOption[] = ompRoles.map((role) => ({
-        slug: `role:${role.name}`,
-        name: role.name.replace(/[-_]/g, " "),
-        upstreamProviderName: "Roles",
-        upstreamProviderId: "roles",
-        role:
-          role.thinkingLevel !== undefined
-            ? { name: role.name, model: role.model, thinkingLevel: role.thinkingLevel }
-            : { name: role.name, model: role.model },
-      }));
-      result.omp = [...roleOptions, ...result.omp];
-    }
+    // OMP `modelRoles` are internal sub-agent personas the default agent spawns
+    // through its Task tool — not user-selectable models — so a discovery
+    // result's `roles` never becomes picker options.
     // Terminal OMP discovery failure: drop the hint placeholder but keep
     // user-configured custom models — the picker still renders the
     // discovery error line above whatever options remain.
