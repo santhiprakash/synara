@@ -31,6 +31,11 @@ export const MODEL_SELECTION_INPUT_SCHEMA = {
       type: "string",
       description: "Exact model slug from synara_capabilities providers[].models[].slug.",
     },
+    instanceId: {
+      type: "string",
+      description:
+        "Provider account id from synara_capabilities providers[].instances[].instanceId. Omit to run on the provider's default account.",
+    },
     options: {
       type: "object",
       description: AGENT_GATEWAY_TARGET_OPTIONS_DESCRIPTION,
@@ -153,9 +158,9 @@ export function parseProviderKind(raw: string): ProviderKind {
 }
 
 /**
- * Read an exact `{ provider, model, options? }` target argument. Unknown option
- * keys are preserved so `resolveAgentGatewayTarget` rejects them instead of the
- * decoder silently dropping a typo.
+ * Read an exact `{ provider, model, instanceId?, options? }` target argument.
+ * Unknown option keys are preserved so `resolveAgentGatewayTarget` rejects
+ * them instead of the decoder silently dropping a typo.
  */
 export function readModelSelectionArg(
   args: Record<string, unknown>,
@@ -165,8 +170,14 @@ export function readModelSelectionArg(
   if (raw === undefined) return undefined;
   const provider = parseProviderKind(readStringArg(raw, "provider", { required: true })!);
   const model = readStringArg(raw, "model", { required: true })!;
+  const instanceId = readStringArg(raw, "instanceId");
   const options = readRecordArg(raw, "options");
-  return { provider, model, ...(options !== undefined ? { options } : {}) } as ModelSelection;
+  return {
+    provider,
+    model,
+    ...(instanceId !== undefined ? { instanceId } : {}),
+    ...(options !== undefined ? { options } : {}),
+  } as ModelSelection;
 }
 
 export function buildModelSelection(

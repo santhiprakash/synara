@@ -155,6 +155,15 @@ const makeFixture = Effect.fn(function* (scenario: string) {
     git: {} as GitCoreShape,
     serverConfig: { worktreesDir: "/tmp/hub-saga-worktrees" } as ServerConfigShape,
     loadProviderAvailabilities: Effect.succeed(new Map()),
+    loadProviderInstances: Effect.succeed([
+      {
+        instanceId: "codex",
+        driver: "codex",
+        displayName: "Codex",
+        isDefault: true,
+        enabled: true,
+      },
+    ]),
     requireThreadShell: () => Effect.succeed(caller),
   });
   const context: GatewayCreationContext = {

@@ -127,6 +127,11 @@ export const ExternalMcpCreateTaskInput = Schema.Struct({
   projectId: ProjectId,
   provider: ProviderKind,
   model: TrimmedNonEmptyString,
+  // Provider account (instance) selector. Pick a value from synara_capabilities
+  // providers[].instances[].instanceId; omit to run on the provider's default
+  // account. Unknown, cross-driver, or disabled instances fail validation
+  // before any task is created.
+  instanceId: Schema.optional(TrimmedNonEmptyString),
   options: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
   prompt: TrimmedNonEmptyString.check(Schema.isMaxLength(EXTERNAL_MCP_MAX_PROMPT_CHARS)),
   title: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(240))),

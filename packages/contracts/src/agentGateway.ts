@@ -7,7 +7,7 @@
  */
 import { Schema } from "effect";
 
-import { ProjectId, ThreadId, TurnId } from "./baseSchemas";
+import { ProjectId, ThreadId, TrimmedNonEmptyString, TurnId } from "./baseSchemas";
 import { ModelSelection, ProviderKind } from "./orchestration";
 import { ProviderModelDescriptor } from "./providerDiscovery";
 import { ServerProviderAuthStatus } from "./server";
@@ -21,6 +21,7 @@ export const SynaraGatewayErrorCode = Schema.Literals([
   "caller_turn_inactive",
   "capability_denied",
   "provider_unavailable",
+  "instance_unavailable",
   "model_unavailable",
   "model_option_unavailable",
   "idempotency_conflict",
@@ -98,10 +99,19 @@ export const SynaraCreateThreadsInput = Schema.Struct({
 }).annotate({ parseOptions: { onExcessProperty: "error" } });
 export type SynaraCreateThreadsInput = typeof SynaraCreateThreadsInput.Type;
 
+export const SynaraProviderInstanceDescriptor = Schema.Struct({
+  instanceId: TrimmedNonEmptyString,
+  displayName: Schema.String,
+  isDefault: Schema.Boolean,
+  enabled: Schema.Boolean,
+});
+export type SynaraProviderInstanceDescriptor = typeof SynaraProviderInstanceDescriptor.Type;
+
 export const SynaraProviderCatalog = Schema.Struct({
   provider: ProviderKind,
   defaultModel: Schema.NullOr(Schema.String),
   models: Schema.Array(ProviderModelDescriptor),
+  instances: Schema.Array(SynaraProviderInstanceDescriptor),
   enabled: Schema.Boolean,
   available: Schema.Boolean,
   authStatus: Schema.optional(ServerProviderAuthStatus),

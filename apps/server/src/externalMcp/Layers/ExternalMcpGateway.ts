@@ -13,7 +13,7 @@ import {
   type ServerProviderStatus,
 } from "@synara/contracts";
 import { Effect, Layer, Option, Schema } from "effect";
-import { isProviderKind } from "@synara/shared/providerInstances";
+import { deriveProviderInstances, isProviderKind } from "@synara/shared/providerInstances";
 
 import { GitCore } from "../../git/Services/GitCore.ts";
 import { ServerConfig } from "../../config.ts";
@@ -207,6 +207,9 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
       }),
     );
   });
+  const loadProviderInstances = settings.getSettings.pipe(
+    Effect.map((serverSettings) => deriveProviderInstances(serverSettings)),
+  );
 
   const requireThreadShell = (threadId: string) =>
     snapshotQuery.getThreadShellById(ThreadId.makeUnsafe(threadId)).pipe(
@@ -228,6 +231,7 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
     externalMcpRepository: externalRepository,
     serverConfig,
     loadProviderAvailabilities,
+    loadProviderInstances,
     requireThreadShell,
   });
 
@@ -265,10 +269,12 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
             ),
           );
         const availabilities = yield* loadProviderAvailabilities;
+        const instances = yield* loadProviderInstances;
         const providers = yield* Effect.forEach(PROVIDER_KINDS, (provider) =>
           loadAgentGatewayProviderCatalog({
             provider,
             discovery: providerDiscovery,
+            instances,
             ...(availabilities.get(provider)
               ? { availability: availabilities.get(provider)! }
               : {}),
@@ -406,6 +412,11 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
           projectId: { type: "string" },
           provider: { type: "string", enum: [...PROVIDER_KINDS] },
           model: { type: "string" },
+          instanceId: {
+            type: "string",
+            description:
+              "Provider account id from synara_capabilities providers[].instances[].instanceId. Omit to run on the provider's default account.",
+          },
           options: {
             type: "object",
             description: AGENT_GATEWAY_TARGET_OPTIONS_DESCRIPTION,
@@ -482,6 +493,7 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
                 target: {
                   provider: input.provider,
                   model: input.model,
+                  ...(input.instanceId ? { instanceId: input.instanceId } : {}),
                   ...(input.options ? { options: input.options } : {}),
                 },
                 ...(input.environment ? { environment: input.environment } : {}),

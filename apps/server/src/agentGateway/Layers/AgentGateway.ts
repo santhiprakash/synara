@@ -40,7 +40,7 @@ import {
   type TurnDispatchMode,
 } from "@synara/contracts";
 import { runtimeModeEscalatesPrivilege } from "@synara/shared/runtimeMode";
-import { isProviderKind } from "@synara/shared/providerInstances";
+import { deriveProviderInstances, isProviderKind } from "@synara/shared/providerInstances";
 import { Effect, Layer, Option } from "effect";
 
 import { GitCore } from "../../git/Services/GitCore.ts";
@@ -205,6 +205,9 @@ export const makeAgentGateway = Effect.gen(function* () {
       }),
     );
   });
+  const loadProviderInstances = serverSettings.getSettings.pipe(
+    Effect.map((settings) => deriveProviderInstances(settings)),
+  );
 
   yield* recoverInterruptedAgentGatewayOperations({
     operationRepository,
@@ -260,6 +263,7 @@ export const makeAgentGateway = Effect.gen(function* () {
       return yield* resolveAgentGatewayTarget({
         target: input.target,
         discovery: providerDiscovery,
+        instances: yield* loadProviderInstances,
         ...(availability !== undefined ? { availability } : {}),
         cwd: project.workspaceRoot,
       });
@@ -309,6 +313,7 @@ export const makeAgentGateway = Effect.gen(function* () {
     projectionTurns,
     providerDiscovery,
     loadProviderAvailabilities,
+    loadProviderInstances,
     requireThreadShell,
     workspacePaths: {
       homeDir: serverConfig.homeDir,
@@ -334,6 +339,7 @@ export const makeAgentGateway = Effect.gen(function* () {
     operationRepository,
     serverConfig,
     loadProviderAvailabilities,
+    loadProviderInstances,
     requireThreadShell,
     authorizeManagedGoalCreation: (input) =>
       projectAgentService

@@ -11,6 +11,7 @@ import {
   type ProviderListModelsResult,
   type ProviderModelDescriptor,
   type ServerProviderAuthStatus,
+  type SynaraProviderInstanceDescriptor,
 } from "@synara/contracts";
 import { getClaudeContextWindowSuffix, stripClaudeContextWindowSuffix } from "@synara/shared/model";
 import { defaultInstanceIdForProvider } from "@synara/shared/providerInstances";
@@ -20,6 +21,7 @@ import type { ProviderDiscoveryServiceShape } from "../provider/Services/Provide
 
 export type AgentGatewayTargetErrorCode =
   | "provider_unavailable"
+  | "instance_unavailable"
   | "model_unavailable"
   | "model_option_unavailable";
 
@@ -35,10 +37,24 @@ export class AgentGatewayTargetError extends Error {
   }
 }
 
+/**
+ * A configured provider account as the gateway sees it. Structurally satisfied
+ * by `ResolvedProviderInstance` from `@synara/shared/providerInstances`, so
+ * callers can pass `deriveProviderInstances(settings)` output verbatim.
+ */
+export interface AgentGatewayProviderInstance {
+  readonly instanceId: string;
+  readonly driver: ProviderKind;
+  readonly displayName: string;
+  readonly isDefault: boolean;
+  readonly enabled: boolean;
+}
+
 export interface AgentGatewayProviderCatalog {
   readonly provider: ProviderKind;
   readonly defaultModel: string | null;
   readonly models: ReadonlyArray<ProviderModelDescriptor>;
+  readonly instances: ReadonlyArray<SynaraProviderInstanceDescriptor>;
   readonly enabled: boolean;
   readonly available: boolean;
   readonly authStatus?: ServerProviderAuthStatus;
@@ -272,10 +288,21 @@ export function loadAgentGatewayProviderCatalog(input: {
   readonly provider: ProviderKind;
   readonly discovery: ProviderDiscoveryServiceShape;
   readonly availability?: AgentGatewayProviderAvailability;
+  readonly instances: ReadonlyArray<AgentGatewayProviderInstance>;
   readonly cwd?: string;
 }): Effect.Effect<AgentGatewayProviderCatalog> {
   const defaultModel = providerDefaultModel(input.provider);
   const availability = input.availability ?? { enabled: true };
+  // Instance identity is settings-derived, so advertise it even when the
+  // provider's runtime catalog is unavailable — enabled state travels per row.
+  const instances: ReadonlyArray<SynaraProviderInstanceDescriptor> = input.instances
+    .filter((instance) => instance.driver === input.provider)
+    .map((instance) => ({
+      instanceId: instance.instanceId,
+      displayName: instance.displayName,
+      isDefault: instance.isDefault,
+      enabled: instance.enabled,
+    }));
   const unavailableReason =
     availability.enabled === false
       ? `Provider "${input.provider}" is disabled in Synara settings.`
@@ -289,6 +316,7 @@ export function loadAgentGatewayProviderCatalog(input: {
       provider: input.provider,
       defaultModel,
       models: [],
+      instances,
       enabled: availability.enabled,
       available: false,
       ...(availability.authStatus ? { authStatus: availability.authStatus } : {}),
@@ -302,6 +330,7 @@ export function loadAgentGatewayProviderCatalog(input: {
         provider: input.provider,
         defaultModel,
         models: result.models,
+        instances,
         enabled: true,
         available: result.models.length > 0 || defaultModel !== null,
         ...(availability.authStatus ? { authStatus: availability.authStatus } : {}),
@@ -312,6 +341,7 @@ export function loadAgentGatewayProviderCatalog(input: {
           provider: input.provider,
           defaultModel,
           models: [],
+          instances,
           enabled: true,
           available: defaultModel !== null,
           ...(availability.authStatus ? { authStatus: availability.authStatus } : {}),
@@ -654,12 +684,19 @@ export function resolveAgentGatewayTarget(input: {
   readonly target: ModelSelection;
   readonly discovery: ProviderDiscoveryServiceShape;
   readonly availability?: AgentGatewayProviderAvailability;
+  /**
+   * Configured provider instances (deriveProviderInstances output). When
+   * provided, an explicit target.instanceId is validated here — before any
+   * git, thread, or worktree side effect — instead of failing at session bind.
+   */
+  readonly instances?: ReadonlyArray<AgentGatewayProviderInstance>;
   readonly cwd?: string;
 }): Effect.Effect<ModelSelection, AgentGatewayTargetError> {
   return Effect.gen(function* () {
     const catalog = yield* loadAgentGatewayProviderCatalog({
       provider: input.target.provider,
       discovery: input.discovery,
+      instances: input.instances ?? [],
       ...(input.availability ? { availability: input.availability } : {}),
       ...(input.cwd ? { cwd: input.cwd } : {}),
     });
@@ -675,6 +712,39 @@ export function resolveAgentGatewayTarget(input: {
           },
         ),
       );
+    }
+
+    const instances = input.instances;
+    if (instances !== undefined && input.target.instanceId !== undefined) {
+      const requestedInstanceId = input.target.instanceId;
+      const instance = instances.find((candidate) => candidate.instanceId === requestedInstanceId);
+      const failInstance = (message: string) =>
+        new AgentGatewayTargetError("instance_unavailable", message, {
+          provider: input.target.provider,
+          requestedInstanceId,
+          availableInstanceIds: instances.map((candidate) => candidate.instanceId),
+        });
+      if (instance === undefined) {
+        return yield* Effect.fail(
+          failInstance(
+            `Unknown provider instance '${requestedInstanceId}'. Use an exact instanceId from synara_capabilities providers[].instances[].`,
+          ),
+        );
+      }
+      if (instance.driver !== input.target.provider) {
+        return yield* Effect.fail(
+          failInstance(
+            `Requested provider '${input.target.provider}' does not match provider instance '${instance.instanceId}' driver '${instance.driver}'.`,
+          ),
+        );
+      }
+      if (!instance.enabled) {
+        return yield* Effect.fail(
+          failInstance(
+            `Provider instance '${instance.displayName}' is disabled in Settings > Providers.`,
+          ),
+        );
+      }
     }
     const exactDescriptor = catalog.models.find((model) => model.slug === input.target.model);
     // The Claude picker can show a concrete resolved id for a newly discovered

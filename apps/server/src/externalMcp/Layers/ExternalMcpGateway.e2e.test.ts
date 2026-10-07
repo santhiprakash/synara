@@ -335,7 +335,13 @@ describe("external MCP gateway stdio flow", () => {
       Layer.provide(gitLayer),
       Layer.provide(providerDiscoveryLayer),
       Layer.provide(providerHealthLayer),
-      Layer.provide(ServerSettingsService.layerTest()),
+      Layer.provide(
+        ServerSettingsService.layerTest({
+          providerInstances: {
+            codex_work: { driver: "codex", displayName: "Codex Work", enabled: true },
+          },
+        }),
+      ),
       Layer.provide(projectionTurnsLayer),
       Layer.provide(operationLayer),
       Layer.provide(configLayer),
@@ -655,6 +661,80 @@ describe("external MCP gateway stdio flow", () => {
           "Call synara_capabilities with a projectId to list the exact provider/model targets available to this integration.",
         ]);
 
+        // A non-default provider account is advertised and honored end to end,
+        // while a wrong id fails before any thread or worktree exists.
+        const capabilities = yield* gateway.handlePost({
+          authorizationHeader: "Bearer syn_mcp_v1_e2e-client-generated-secret",
+          body: {
+            jsonrpc: "2.0",
+            id: "capabilities",
+            method: "tools/call",
+            params: {
+              name: "synara_capabilities",
+              arguments: { projectId: PROJECT_ID },
+            },
+          },
+        });
+        const capabilitiesPayload = toolPayload(capabilities.body as Record<string, unknown>);
+        const codexCatalog = (capabilitiesPayload.providers as Array<Record<string, unknown>>).find(
+          (provider) => provider.provider === "codex",
+        );
+        expect(codexCatalog?.instances).toEqual([
+          { instanceId: "codex", displayName: "Codex", isDefault: true, enabled: true },
+          { instanceId: "codex_work", displayName: "Codex Work", isDefault: false, enabled: true },
+        ]);
+
+        const instanceTask = yield* gateway.handlePost({
+          authorizationHeader: "Bearer syn_mcp_v1_e2e-client-generated-secret",
+          body: {
+            jsonrpc: "2.0",
+            id: "create-with-instance",
+            method: "tools/call",
+            params: {
+              name: "synara_create_task",
+              arguments: {
+                requestId: "external-e2e-instance-request",
+                projectId: PROJECT_ID,
+                provider: "codex",
+                model: "gpt-5.5",
+                instanceId: "codex_work",
+                prompt: "Run on the secondary account.",
+              },
+            },
+          },
+        });
+        expect(JSON.stringify(instanceTask.body)).not.toContain('"isError":true');
+        const instanceCreates = dispatched.filter((command) => command.type === "thread.create");
+        expect(instanceCreates).toHaveLength(2);
+        expect(instanceCreates[1]?.modelSelection).toMatchObject({
+          provider: "codex",
+          instanceId: "codex_work",
+          model: "gpt-5.5",
+        });
+
+        const badInstance = yield* gateway.handlePost({
+          authorizationHeader: "Bearer syn_mcp_v1_e2e-client-generated-secret",
+          body: {
+            jsonrpc: "2.0",
+            id: "create-with-bad-instance",
+            method: "tools/call",
+            params: {
+              name: "synara_create_task",
+              arguments: {
+                requestId: "external-e2e-bad-instance",
+                projectId: PROJECT_ID,
+                provider: "codex",
+                model: "gpt-5.5",
+                instanceId: "codex_missing",
+                prompt: "This task must never dispatch.",
+              },
+            },
+          },
+        });
+        expect(JSON.stringify(badInstance.body)).toContain("instance_unavailable");
+        expect(dispatched.filter((command) => command.type === "thread.create")).toHaveLength(2);
+        expect(worktreeCreates).toHaveLength(2);
+
         const auditRows = yield* sql<{
           readonly requestId: string | null;
           readonly projectId: string | null;
@@ -670,7 +750,7 @@ describe("external MCP gateway stdio flow", () => {
           FROM external_mcp_audit_log
           ORDER BY created_at ASC, audit_id ASC
         `;
-        expect(auditRows).toHaveLength(9);
+        expect(auditRows).toHaveLength(12);
         expect(auditRows.find((row) => row.requestId === "external-e2e-request")).toMatchObject({
           projectId: PROJECT_ID,
           runtimeMode: "approval-required",
@@ -685,8 +765,8 @@ describe("external MCP gateway stdio flow", () => {
           SELECT plan_json AS "planJson" FROM external_mcp_operations
           WHERE integration_id = ${issued.integration.integrationId}
         `;
-        expect(operationPlans).toHaveLength(1);
-        expect(operationPlans[0]!.planJson).not.toContain(prompt);
+        expect(operationPlans).toHaveLength(2);
+        expect(operationPlans.every((plan) => !plan.planJson.includes(prompt))).toBe(true);
 
         yield* sql`
           CREATE TRIGGER reject_external_mcp_gateway_audit_finish

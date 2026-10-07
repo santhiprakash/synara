@@ -121,6 +121,20 @@ describe("agent gateway contracts", () => {
             provider: "codex",
             defaultModel: "gpt-5.5",
             models: [{ slug: "gpt-5.5", name: "GPT-5.5" }],
+            instances: [
+              {
+                instanceId: "codex",
+                displayName: "Codex",
+                isDefault: true,
+                enabled: true,
+              },
+              {
+                instanceId: "codex_work",
+                displayName: "Codex Work",
+                isDefault: false,
+                enabled: false,
+              },
+            ],
             enabled: true,
             available: true,
             authStatus: "authenticated",

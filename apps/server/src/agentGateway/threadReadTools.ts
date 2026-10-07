@@ -21,6 +21,7 @@ import {
   agentGatewayTargetOptionGuidance,
   loadAgentGatewayProviderCatalog,
   type AgentGatewayProviderAvailability,
+  type AgentGatewayProviderInstance,
 } from "./targetResolver.ts";
 import {
   deriveAgentThreadStatus,
@@ -60,6 +61,11 @@ export interface ThreadReadToolsInput {
     unknown,
     never
   >;
+  readonly loadProviderInstances: Effect.Effect<
+    ReadonlyArray<AgentGatewayProviderInstance>,
+    unknown,
+    never
+  >;
   readonly requireThreadShell: (
     threadId: string,
   ) => Effect.Effect<OrchestrationThreadShell, unknown, never>;
@@ -72,6 +78,7 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
     projectionTurns,
     providerDiscovery,
     loadProviderAvailabilities,
+    loadProviderInstances,
     requireThreadShell,
     workspacePaths,
   } = input;
@@ -142,10 +149,12 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
           ),
         );
         const availabilities = yield* loadProviderAvailabilities;
+        const instances = yield* loadProviderInstances;
         const providers = yield* Effect.forEach(PROVIDER_KINDS, (provider) =>
           loadAgentGatewayProviderCatalog({
             provider,
             discovery: providerDiscovery,
+            instances,
             ...(availabilities.get(provider) !== undefined
               ? { availability: availabilities.get(provider)! }
               : {}),

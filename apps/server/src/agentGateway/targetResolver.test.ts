@@ -11,7 +11,9 @@ import type { ProviderDiscoveryServiceShape } from "../provider/Services/Provide
 import {
   AgentGatewayTargetError,
   agentGatewayTargetOptionGuidance,
+  loadAgentGatewayProviderCatalog,
   resolveAgentGatewayTarget,
+  type AgentGatewayProviderInstance,
 } from "./targetResolver.ts";
 
 const discovery = {
@@ -197,6 +199,7 @@ describe("agent gateway target resolver", () => {
         defaultModel: "gpt-5.5",
         enabled: true,
         available: true,
+        instances: [],
         models: [
           {
             slug: "gpt-5.6-terra",
@@ -228,6 +231,7 @@ describe("agent gateway target resolver", () => {
         defaultModel: "Gemini 3.5 Flash",
         enabled: true,
         available: true,
+        instances: [],
         models: [
           {
             slug: "Gemini 3.5 Flash",
@@ -350,6 +354,7 @@ describe("agent gateway target resolver", () => {
         defaultModel: "opencode/big-pickle",
         enabled: true,
         available: true,
+        instances: [],
         models: (yield* optionDiscovery.listModels({ provider: "opencode" })).models,
       });
       assert.deepEqual(guidance.alternativeOptionKeys, ["agent"]);
@@ -445,6 +450,7 @@ describe("agent gateway target resolver", () => {
           defaultModel: descriptor.slug,
           enabled: true,
           available: true,
+          instances: [],
           models: [descriptor],
         });
         assert.deepEqual(
@@ -532,6 +538,7 @@ describe("agent gateway target resolver", () => {
         defaultModel: descriptor.slug,
         enabled: true,
         available: true,
+        instances: [],
         models: [descriptor],
       });
       assert.deepEqual(
@@ -626,6 +633,7 @@ describe("agent gateway target resolver", () => {
         defaultModel: descriptor.slug,
         enabled: true,
         available: true,
+        instances: [],
         models: [descriptor],
       });
       assert.deepInclude(
@@ -663,6 +671,7 @@ describe("agent gateway target resolver", () => {
         defaultModel: "opencode-model",
         enabled: true,
         available: true,
+        instances: [],
         models: [makeVariantDescriptor("opencode-model")],
       });
       assert.deepInclude(
@@ -764,4 +773,142 @@ describe("agent gateway target resolver", () => {
       assert.equal(invalidOption.code, "model_option_unavailable");
     }),
   );
+
+  describe("provider instances", () => {
+    const instances: ReadonlyArray<AgentGatewayProviderInstance> = [
+      {
+        instanceId: "codex",
+        driver: "codex",
+        displayName: "Codex",
+        isDefault: true,
+        enabled: true,
+      },
+      {
+        instanceId: "codex_work",
+        driver: "codex",
+        displayName: "Codex Work",
+        isDefault: false,
+        enabled: true,
+      },
+      {
+        instanceId: "codex_paused",
+        driver: "codex",
+        displayName: "Codex Paused",
+        isDefault: false,
+        enabled: false,
+      },
+      {
+        instanceId: "claudeAgent",
+        driver: "claudeAgent",
+        displayName: "Claude",
+        isDefault: true,
+        enabled: true,
+      },
+    ];
+
+    it.effect("lists only the provider's instances in its catalog", () =>
+      Effect.gen(function* () {
+        const catalog = yield* loadAgentGatewayProviderCatalog({
+          provider: "codex",
+          discovery,
+          instances,
+        });
+        assert.deepEqual(catalog.instances, [
+          { instanceId: "codex", displayName: "Codex", isDefault: true, enabled: true },
+          {
+            instanceId: "codex_work",
+            displayName: "Codex Work",
+            isDefault: false,
+            enabled: true,
+          },
+          {
+            instanceId: "codex_paused",
+            displayName: "Codex Paused",
+            isDefault: false,
+            enabled: false,
+          },
+        ]);
+      }),
+    );
+
+    it.effect("resolves an explicit non-default instanceId and keeps it on the target", () =>
+      Effect.gen(function* () {
+        const target = {
+          provider: "codex" as const,
+          instanceId: "codex_work",
+          model: "gpt-5.6-terra",
+        };
+        assert.deepEqual(
+          yield* resolveAgentGatewayTarget({ target, discovery, instances }),
+          target,
+        );
+      }),
+    );
+
+    it.effect("rejects an unknown instanceId as instance_unavailable", () =>
+      Effect.gen(function* () {
+        const result = yield* resolveAgentGatewayTarget({
+          target: { provider: "codex", instanceId: "codex_missing", model: "gpt-5.6-terra" },
+          discovery,
+          instances,
+        }).pipe(
+          Effect.map(() => ({ code: "unexpected-success" })),
+          Effect.catch((error) => Effect.succeed(error)),
+        );
+        assert.instanceOf(result, AgentGatewayTargetError);
+        if (!(result instanceof AgentGatewayTargetError)) return;
+        assert.equal(result.code, "instance_unavailable");
+        assert.include(result.message, "codex_missing");
+        assert.deepEqual(
+          (result.details as { requestedInstanceId: string }).requestedInstanceId,
+          "codex_missing",
+        );
+      }),
+    );
+
+    it.effect("rejects an instanceId owned by another driver", () =>
+      Effect.gen(function* () {
+        const result = yield* resolveAgentGatewayTarget({
+          target: { provider: "codex", instanceId: "claudeAgent", model: "gpt-5.6-terra" },
+          discovery,
+          instances,
+        }).pipe(
+          Effect.map(() => ({ code: "unexpected-success" })),
+          Effect.catch((error) => Effect.succeed(error)),
+        );
+        assert.instanceOf(result, AgentGatewayTargetError);
+        if (!(result instanceof AgentGatewayTargetError)) return;
+        assert.equal(result.code, "instance_unavailable");
+        assert.include(result.message, "claudeAgent");
+      }),
+    );
+
+    it.effect("rejects a disabled instance", () =>
+      Effect.gen(function* () {
+        const result = yield* resolveAgentGatewayTarget({
+          target: { provider: "codex", instanceId: "codex_paused", model: "gpt-5.6-terra" },
+          discovery,
+          instances,
+        }).pipe(
+          Effect.map(() => ({ code: "unexpected-success" })),
+          Effect.catch((error) => Effect.succeed(error)),
+        );
+        assert.instanceOf(result, AgentGatewayTargetError);
+        if (!(result instanceof AgentGatewayTargetError)) return;
+        assert.equal(result.code, "instance_unavailable");
+        assert.include(result.message, "Codex Paused");
+      }),
+    );
+
+    it.effect("does not validate instanceId when no instance list is provided", () =>
+      Effect.gen(function* () {
+        const target = {
+          provider: "codex" as const,
+          instanceId: "codex_untracked",
+          model: "gpt-5.6-terra",
+        };
+        assert.deepEqual(yield* resolveAgentGatewayTarget({ target, discovery }), target);
+      }),
+    );
+  });
 });

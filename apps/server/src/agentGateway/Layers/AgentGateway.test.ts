@@ -388,6 +388,7 @@ function makeHarnessLayer(
     readonly dispatchDelayMs?: number;
     readonly interruptedOperations?: ReadonlyArray<AgentGatewayOperationRecord>;
     readonly providerStatuses?: ReadonlyArray<ServerProviderStatus>;
+    readonly settingsOverrides?: Parameters<(typeof ServerSettingsService)["layerTest"]>[0];
     readonly existingBranches?: ReadonlyArray<string>;
     readonly existingWorktrees?: Readonly<Record<string, string>>;
     readonly verifiedOwnershipTokens?: ReadonlyArray<string>;
@@ -1343,7 +1344,7 @@ function makeHarnessLayer(
     Layer.provide(gitManagerLayer),
     Layer.provide(providerDiscoveryLayer),
     Layer.provide(providerHealthLayer),
-    Layer.provide(ServerSettingsService.layerTest()),
+    Layer.provide(ServerSettingsService.layerTest(options.settingsOverrides)),
     Layer.provide(operationLayer),
     Layer.provide(projectionTurnsLayer),
     Layer.provide(diagnosticsLayer),
@@ -3983,6 +3984,154 @@ describe("AgentGateway", () => {
     }).pipe(Effect.provide(gatewayLayer));
   });
 
+  it.effect(
+    "advertises provider instances and routes a create target to the non-default account",
+    () => {
+      const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads, [], {
+        settingsOverrides: {
+          providerInstances: {
+            codex_work: { driver: "codex", displayName: "Codex Work", enabled: true },
+            codex_paused: { driver: "codex", displayName: "Codex Paused", enabled: false },
+          },
+        },
+      });
+      return Effect.gen(function* () {
+        const harness = yield* makeHarness;
+        const capabilities = toolResultJson(
+          (yield* harness.callTool({
+            token: "token-parent",
+            name: "synara_capabilities",
+            args: {},
+          })).result,
+        );
+        const codex = (
+          capabilities.providers as Array<{ provider: string; instances?: unknown }>
+        ).find((provider) => provider.provider === "codex");
+        assert.deepEqual(codex?.instances, [
+          { instanceId: "codex", displayName: "Codex", isDefault: true, enabled: true },
+          {
+            instanceId: "codex_work",
+            displayName: "Codex Work",
+            isDefault: false,
+            enabled: true,
+          },
+          {
+            instanceId: "codex_paused",
+            displayName: "Codex Paused",
+            isDefault: false,
+            enabled: false,
+          },
+        ]);
+
+        const response = yield* harness.callTool({
+          token: "token-parent",
+          name: "synara_create_threads",
+          args: {
+            requestId: "codex-work-instance",
+            threads: [
+              {
+                prompt: "use the work account",
+                target: { provider: "codex", model: "gpt-5.5", instanceId: "codex_work" },
+              },
+            ],
+          },
+        });
+        assert.isFalse(isToolError(response.result), toolErrorText(response.result));
+        const create = harness.dispatched.find((command) => command.type === "thread.create");
+        const turn = harness.dispatched.find((command) => command.type === "thread.turn.start");
+        assert.equal(create?.type, "thread.create");
+        if (create?.type === "thread.create") {
+          assert.deepEqual(create.modelSelection, {
+            provider: "codex",
+            instanceId: "codex_work",
+            model: "gpt-5.5",
+          });
+        }
+        assert.equal(turn?.type, "thread.turn.start");
+        if (turn?.type === "thread.turn.start") {
+          assert.equal(turn.modelSelection?.instanceId, "codex_work");
+        }
+      }).pipe(Effect.provide(gatewayLayer));
+    },
+  );
+
+  it.effect("rejects unknown, cross-driver, and disabled instanceIds before side effects", () => {
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads, [], {
+      settingsOverrides: {
+        providerInstances: {
+          codex_work: { driver: "codex", displayName: "Codex Work", enabled: true },
+          codex_paused: { driver: "codex", displayName: "Codex Paused", enabled: false },
+        },
+      },
+    });
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const attempts = [
+        { requestId: "unknown-instance", instanceId: "codex_missing" },
+        { requestId: "cross-driver-instance", instanceId: "claudeAgent" },
+        { requestId: "disabled-instance", instanceId: "codex_paused" },
+      ];
+      for (const attempt of attempts) {
+        const response = yield* harness.callTool({
+          token: "token-parent",
+          name: "synara_create_threads",
+          args: {
+            requestId: attempt.requestId,
+            threads: [
+              {
+                prompt: "must not dispatch",
+                target: {
+                  provider: "codex",
+                  model: "gpt-5.5",
+                  instanceId: attempt.instanceId,
+                },
+              },
+            ],
+          },
+        });
+        assert.isTrue(isToolError(response.result));
+        assert.equal(
+          (toolResultJson(response.result).error as { code: string }).code,
+          "instance_unavailable",
+        );
+      }
+      assert.equal(harness.dispatched.length, 0);
+      assert.equal(harness.worktreeCreates.length, 0);
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("keeps the default provider account when target.instanceId is omitted", () => {
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads, [], {
+      settingsOverrides: {
+        providerInstances: {
+          codex_work: { driver: "codex", displayName: "Codex Work", enabled: true },
+        },
+      },
+    });
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const response = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_create_threads",
+        args: {
+          requestId: "default-instance",
+          threads: [
+            {
+              prompt: "uses the default account",
+              target: { provider: "codex", model: "gpt-5.5" },
+            },
+          ],
+        },
+      });
+      assert.isFalse(isToolError(response.result), toolErrorText(response.result));
+      const create = harness.dispatched.find((command) => command.type === "thread.create");
+      assert.equal(create?.type, "thread.create");
+      if (create?.type === "thread.create") {
+        assert.equal(create.modelSelection?.instanceId, "codex");
+      }
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
   it.effect("preflights the whole batch so one invalid target creates nothing", () => {
     const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
     return Effect.gen(function* () {
@@ -5927,6 +6076,54 @@ describe("AgentGateway", () => {
       });
       assert.isFalse(isToolError(preserved.result), toolErrorText(preserved.result));
       assert.notProperty(harness.automationUpdates[2] as Record<string, unknown>, "modelSelection");
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("accepts instance-qualified automation targets and rejects unknown instances", () => {
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads, [], {
+      settingsOverrides: {
+        providerInstances: {
+          codex_work: { driver: "codex", displayName: "Codex Work", enabled: true },
+        },
+      },
+    });
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const created = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_create_automation",
+        args: {
+          name: "Work-account heartbeat",
+          prompt: "Run scheduled work on the secondary account.",
+          mode: "standalone",
+          schedule: { type: "interval", everySeconds: 300 },
+          target: { provider: "codex", model: "gpt-5.5", instanceId: "codex_work" },
+        },
+      });
+      assert.isFalse(isToolError(created.result), toolErrorText(created.result));
+      assert.deepEqual(harness.automationCreates[0]?.modelSelection, {
+        provider: "codex",
+        instanceId: "codex_work",
+        model: "gpt-5.5",
+      });
+
+      const rejected = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_create_automation",
+        args: {
+          name: "Unknown account",
+          prompt: "Must not persist.",
+          mode: "standalone",
+          schedule: { type: "interval", everySeconds: 300 },
+          target: { provider: "codex", model: "gpt-5.5", instanceId: "codex_missing" },
+        },
+      });
+      assert.isTrue(isToolError(rejected.result));
+      assert.equal(
+        (toolResultJson(rejected.result).error as { code: string }).code,
+        "instance_unavailable",
+      );
+      assert.equal(harness.automationCreates.length, 1);
     }).pipe(Effect.provide(gatewayLayer));
   });
 

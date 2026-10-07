@@ -134,7 +134,9 @@ The advertised catalog is filtered by the integration's granted scopes. It expos
 
 - `synara_overview` — orient in one call with allowed projects, paths and activity, provider
   availability, granted scopes, safe defaults, limits, and suggested next steps.
-- `synara_capabilities` — provider/model construction and safety limits for an allowed project.
+- `synara_capabilities` — provider/model construction, configured provider accounts
+  (`providers[].instances[]` with `instanceId`, `displayName`, `isDefault`, `enabled`), and safety
+  limits for an allowed project.
 - `synara_list_allowed_projects` — only projects selected by the user.
 - `synara_create_task` — one task per stable `requestId`.
 - `synara_wait_for_task` — wait for an authorized task without changing it.
@@ -142,7 +144,9 @@ The advertised catalog is filtered by the integration's granted scopes. It expos
   separate `tasks:read-project` scope.
 
 Creation requires an explicit `projectId`, `provider`, `model`, `prompt`, and stable `requestId`.
-The default environment is a managed worktree and the default runtime is approval-required. Local
+An optional `instanceId` selects a configured non-default provider account from
+`synara_capabilities`; omitting it runs on the provider's default account. The default environment
+is a managed worktree and the default runtime is approval-required. Local
 checkout execution and full-access execution are independent, explicit scopes.
 
 ## Security and lifecycle

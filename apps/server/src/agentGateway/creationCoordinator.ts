@@ -49,6 +49,7 @@ import {
   AgentGatewayTargetError,
   resolveAgentGatewayTarget,
   type AgentGatewayProviderAvailability,
+  type AgentGatewayProviderInstance,
 } from "./targetResolver.ts";
 import { ToolInputError, errorText } from "./toolInput.ts";
 import { GatewayToolError, gatewayToolErrorResult } from "./toolRuntime.ts";
@@ -97,6 +98,10 @@ interface CreationCoordinatorDependencies {
   readonly serverConfig: ServerConfigShape;
   readonly loadProviderAvailabilities: Effect.Effect<
     ReadonlyMap<ProviderKind, AgentGatewayProviderAvailability>,
+    unknown
+  >;
+  readonly loadProviderInstances: Effect.Effect<
+    ReadonlyArray<AgentGatewayProviderInstance>,
     unknown
   >;
   readonly requireThreadShell: (
@@ -210,6 +215,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
     externalMcpRepository,
     serverConfig,
     loadProviderAvailabilities,
+    loadProviderInstances,
     requireThreadShell,
     authorizeManagedGoalCreation,
     recordManagedWorkerThreads,
@@ -517,6 +523,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
       }
       const callerIsolatedInWorktree = caller?.envMode === "worktree";
       const providerAvailabilities = yield* loadProviderAvailabilities;
+      const providerInstances = yield* loadProviderInstances;
 
       const prepared = yield* Effect.forEach(input.threads, (spec, index) =>
         Effect.gen(function* () {
@@ -548,6 +555,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
           const target = yield* resolveAgentGatewayTarget({
             target: spec.target,
             discovery: providerDiscovery,
+            instances: providerInstances,
             ...(providerAvailability !== undefined ? { availability: providerAvailability } : {}),
             cwd: project.workspaceRoot,
           });
