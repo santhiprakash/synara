@@ -1,6 +1,6 @@
 import { totalmem } from "node:os";
 
-import { Effect, Layer, FileSystem, Path } from "effect";
+import { Duration, Effect, Layer, FileSystem, Path, Schedule } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { runMigrations } from "../Migrations.ts";
@@ -47,6 +47,19 @@ function errnoCode(cause: unknown): string | undefined {
   const error = cause as (Error & { readonly code?: string; readonly cause?: unknown }) | null;
   return error?.code ?? (error?.cause as NodeJS.ErrnoException | undefined)?.code;
 }
+
+// INCREMENTAL, not FULL, for the same reason synchronous stays NORMAL: the
+// hot per-event write path must not pay truncation work on every commit.
+// Reclaiming is deferred to bounded incremental_vacuum passes instead.
+const AUTO_VACUUM_INCREMENTAL = 2;
+
+// One pass returns at most this many pages to the filesystem. 8192 pages is
+// 32 MiB at the default 4 KiB page size — small enough that a pass never
+// stalls the single serialized connection, large enough to outpace the
+// delete churn that stranded gigabytes of freelist before auto-vacuum
+// existed.
+const INCREMENTAL_VACUUM_PAGE_LIMIT = 8192;
+const INCREMENTAL_VACUUM_INTERVAL = Duration.minutes(5);
 
 const repairSqliteFilePermissions = (dbPath: string) =>
   Effect.promise(async () => {
@@ -131,6 +144,11 @@ const makeSetup = ({
         // lifecycle lock make external mutation effectively impossible, and
         // no internal path truncates the live database.
         yield* sql`PRAGMA mmap_size = ${sql.literal(String(memoryBudget.mmapSizeBytes))};`;
+        // New databases must record INCREMENTAL before their first table is
+        // created (migrations below) so the pointer-map bookkeeping exists
+        // from the start. On a populated pre-auto-vacuum database this pragma
+        // is a connection-level no-op; the transition below adopts it.
+        yield* sql`PRAGMA auto_vacuum = INCREMENTAL;`;
         // Setting locking_mode changes connection policy; this transaction
         // actually acquires and retains the database lock before startup
         // continues, closing the window where another client could attach.
@@ -154,6 +172,44 @@ const makeSetup = ({
             : Effect.fail(cause),
         ),
       );
+      if (dbPath) {
+        // Databases populated before auto_vacuum was enabled keep every freed
+        // page on the freelist forever: the pragma above is a no-op on them
+        // and incremental_vacuum cannot touch a freelist the file does not
+        // track. The only transition is a VACUUM rebuild, so do it here once
+        // — after migrations, so migration-transient pages are reclaimed too.
+        // Afterwards the stored header keeps the mode and this check skips.
+        const autoVacuumRows = yield* sql<{ readonly auto_vacuum: number }>`
+          PRAGMA auto_vacuum;
+        `;
+        if (autoVacuumRows[0]?.auto_vacuum !== AUTO_VACUUM_INCREMENTAL) {
+          yield* Effect.logInfo("Rebuilding state.sqlite once to adopt incremental auto-vacuum");
+          yield* sql`PRAGMA auto_vacuum = INCREMENTAL;`;
+          yield* sql`VACUUM;`;
+        }
+        // auto_vacuum only makes freed pages reclaimable; nothing returns
+        // them until incremental_vacuum runs. One bounded pass here clears
+        // what the previous session left, then a sweep repeats it so a
+        // long-lived process cannot strand the freelist again.
+        const incrementalVacuumPass = sql`
+          PRAGMA incremental_vacuum(${sql.literal(String(INCREMENTAL_VACUUM_PAGE_LIMIT))});
+        `;
+        yield* incrementalVacuumPass;
+        yield* Effect.forkScoped(
+          Effect.sleep(INCREMENTAL_VACUUM_INTERVAL).pipe(
+            Effect.andThen(
+              incrementalVacuumPass.pipe(
+                Effect.catchCause((cause) =>
+                  Effect.logWarning("SQLite incremental vacuum sweep failed", {
+                    cause: String(cause),
+                  }),
+                ),
+                Effect.repeat(Schedule.spaced(INCREMENTAL_VACUUM_INTERVAL)),
+              ),
+            ),
+          ),
+        );
+      }
     }),
   );
 
