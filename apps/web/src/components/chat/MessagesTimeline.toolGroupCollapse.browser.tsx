@@ -411,7 +411,7 @@ describe("MessagesTimeline tool group collapse", () => {
     }
   });
 
-  it("renders submitted questions and answers as separate transcript bubbles", async () => {
+  it("renders a submitted question and its answer as one transcript card", async () => {
     const entries = [
       assistantEntry("before-question", "I need your preference.", false),
       commandEntry("earlier-command", "git status"),
@@ -441,9 +441,13 @@ describe("MessagesTimeline tool group collapse", () => {
     const screen = await render(<ToolGroupCollapseTimeline timelineEntries={entries} />, {
       container: createTimelineHost(),
     });
+    await expect.element(screen.getByText("Color", { exact: true })).toBeVisible();
     await expect.element(screen.getByText("Which accent color?", { exact: true })).toBeVisible();
+    await expect.element(screen.getByText("Answer", { exact: true })).toBeVisible();
     await expect.element(screen.getByText("Amber", { exact: true })).toBeVisible();
-    await expect.element(screen.getByText("Amber · Blue", { exact: true })).toBeVisible();
+    // The answered card drops the option list and the second floating bubble.
+    expect(screen.container.querySelectorAll(".border-dashed")).toHaveLength(1);
+    expect(screen.container.textContent ?? "").not.toContain("Amber · Blue");
     expect(isVisibleOutsideClosedDisclosure("Which accent color?")).toBe(true);
     expect(isVisibleOutsideClosedDisclosure("Amber")).toBe(true);
   });

@@ -4237,8 +4237,10 @@ const UserMessageBody = memo(function UserMessageBody(props: {
   );
 });
 
-// An answered agent question: the question as a left bubble and the submitted
-// answer as a right bubble, both dashed so they read as part of the agent's run.
+// An answered agent question stays visible outside the collapsed turn as one
+// dashed card pairing the question with the submitted answer. Providers that
+// map the prompt onto both header and question (Antigravity ask_question) would
+// otherwise print it twice, and the option list is noise once answered.
 function UserInputExchange(props: {
   items: ReadonlyArray<WorkLogUserInputExchangeItem>;
   chatTypographyStyle: CSSProperties;
@@ -4249,31 +4251,28 @@ function UserInputExchange(props: {
 
   return (
     <div className="flex min-w-0 flex-col gap-2 py-0.5">
-      {props.items.map((item) => (
-        <div key={item.id} className="flex min-w-0 flex-col gap-2">
-          <div className={cn(USER_INPUT_EXCHANGE_BUBBLE_CLASS_NAME, "self-start")}>
-            <p className={MUTED_LABEL_TEXT_CLASS_NAME} style={props.labelStyle}>
-              {item.header}
-            </p>
+      {props.items.map((item) => {
+        const header = item.header.trim();
+        const showHeader = header.length > 0 && header !== item.question.trim();
+        return (
+          <div key={item.id} className={cn(USER_INPUT_EXCHANGE_BUBBLE_CLASS_NAME, "self-start")}>
+            {showHeader ? (
+              <p className={MUTED_LABEL_TEXT_CLASS_NAME} style={props.labelStyle}>
+                {item.header}
+              </p>
+            ) : null}
             <p className="whitespace-pre-wrap break-words" style={props.chatTypographyStyle}>
               {item.question}
             </p>
-            {item.options.length > 0 ? (
-              <p className="text-muted-foreground" style={props.labelStyle}>
-                {item.options.join(" · ")}
-              </p>
-            ) : null}
-          </div>
-          <div className={cn(USER_INPUT_EXCHANGE_BUBBLE_CLASS_NAME, "self-end")}>
-            <p className={MUTED_LABEL_TEXT_CLASS_NAME} style={props.labelStyle}>
+            <p className={cn(MUTED_LABEL_TEXT_CLASS_NAME, "mt-2")} style={props.labelStyle}>
               {t("chat:answer")}
             </p>
             <p className="whitespace-pre-wrap break-words" style={props.answerTypographyStyle}>
               {item.answer ?? t("chat:noAnswer")}
             </p>
           </div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }

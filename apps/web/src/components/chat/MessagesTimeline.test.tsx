@@ -1920,4 +1920,116 @@ describe("MessagesTimeline", () => {
     // Three thread links — no full work-entry chrome around them.
     expect(markup.match(/<button/g)?.length).toBeGreaterThanOrEqual(3);
   });
+
+  it("collapses an answered question exchange into one card without repeating the prompt", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    // Antigravity ask_question maps the property title onto both header and
+    // question, so the transcript used to print the prompt twice plus the full
+    // option list and a second floating answer bubble (#2339).
+    const [exchangeEntry] = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "asked",
+          sequence: 1,
+          kind: "user-input.requested",
+          summary: "User input requested",
+          payload: {
+            requestId: "req-fruit",
+            questions: [
+              {
+                id: "q1",
+                header: "Which fruit should I use?",
+                question: "Which fruit should I use?",
+                options: [
+                  { label: "Apple", description: "Apple" },
+                  { label: "Pear", description: "Pear" },
+                ],
+              },
+            ],
+          },
+        }),
+        makeActivity({
+          id: "answered",
+          sequence: 2,
+          kind: "user-input.resolved",
+          summary: "User input submitted",
+          payload: { requestId: "req-fruit", answers: { q1: "Apple" } },
+        }),
+      ],
+      undefined,
+    );
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...makeTimelineBaseProps()}
+        timelineEntries={[
+          {
+            id: "entry-answered",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            entry: exchangeEntry!,
+          },
+        ]}
+      />,
+    );
+
+    // The prompt renders once: the duplicated muted header line is gone.
+    expect(markup.split("Which fruit should I use?")).toHaveLength(2);
+    // The full option list is gone once the question is answered.
+    expect(markup).not.toContain("Apple · Pear");
+    // One dashed card carries the question and the submitted answer.
+    expect(markup.match(/border-dashed/g)).toHaveLength(1);
+    expect(markup).toContain(">Answer<");
+    expect(markup).toContain(">Apple</p>");
+  });
+
+  it("keeps a distinct header on the answered exchange card", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const [exchangeEntry] = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "asked",
+          sequence: 1,
+          kind: "user-input.requested",
+          summary: "User input requested",
+          payload: {
+            requestId: "req-icon",
+            questions: [
+              {
+                id: "q1",
+                header: "Icon",
+                question: "Which icon should mark background work?",
+                options: [{ label: "Tray", description: "Tray icon" }],
+              },
+            ],
+          },
+        }),
+        makeActivity({
+          id: "answered",
+          sequence: 2,
+          kind: "user-input.resolved",
+          summary: "User input submitted",
+          payload: { requestId: "req-icon", answers: { q1: "Tray" } },
+        }),
+      ],
+      undefined,
+    );
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...makeTimelineBaseProps()}
+        timelineEntries={[
+          {
+            id: "entry-answered",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            entry: exchangeEntry!,
+          },
+        ]}
+      />,
+    );
+
+    expect(markup).toContain(">Icon</p>");
+    expect(markup.split("Which icon should mark background work?")).toHaveLength(2);
+    expect(markup.match(/border-dashed/g)).toHaveLength(1);
+    expect(markup).toContain(">Tray</p>");
+  });
 });
